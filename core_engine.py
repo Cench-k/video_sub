@@ -76,7 +76,10 @@ def _detect_ocr_lang(audio_segs):
 
 
 def _run_ocr(video_path, device, ocr_langs=None):
-    """하드자막 OCR. [(timestamp_s, text), ...] 반환."""
+    """하드자막 OCR. [(timestamp_s, text), ...] 반환.
+    전체 프레임을 스캔해 위치에 무관하게 자막을 탐지.
+    동일 텍스트가 연속되면 하나로 묶어 노이즈와 구분.
+    """
     import cv2
     import easyocr
     import torch
@@ -102,13 +105,14 @@ def _run_ocr(video_path, device, ocr_langs=None):
 
         if frame_idx % sample_interval == 0:
             timestamp = frame_idx / fps
-            h, w = frame.shape[:2]
-            # 하단 30%, 좌우 10% 여백 제거 (TikTok UI 버튼 영역 제외)
-            subtitle_region = frame[int(h * 0.70):, int(w * 0.05):int(w * 0.85)]
 
-            ocr_res = reader.readtext(subtitle_region, detail=1)
-            # 신뢰도 0.6 이상 + 3글자 이상만 허용 (UI 잔상 노이즈 제거)
-            text = " ".join(r[1] for r in ocr_res if r[2] > 0.6 and len(r[1].strip()) >= 3).strip()
+            ocr_res = reader.readtext(frame, detail=1)
+            # y좌표 기준 정렬 후 신뢰도 0.5 이상 + 2글자 이상만 채택
+            sorted_res = sorted(
+                [r for r in ocr_res if r[2] > 0.5 and len(r[1].strip()) >= 2],
+                key=lambda r: r[0][0][1]  # 바운딩박스 좌상단 y좌표
+            )
+            text = " ".join(r[1] for r in sorted_res).strip()
 
             if text and text != prev_text:
                 results.append((timestamp, text))
@@ -124,26 +128,24 @@ def _run_ocr(video_path, device, ocr_langs=None):
 
 def _merge_segments(audio_segs, ocr_segs):
     """
-    음성이 없는 구간은 OCR, OCR이 없는 구간은 음성으로 채우는 병합.
+    OCR 우선, 음성은 OCR 공백 구간만 보완.
     Returns: [(time_s, source_label, text), ...]
     """
     merged = []
 
-    # 음성이 커버하는 1초 버킷 집합
-    audio_buckets = set()
-    for start, end, _ in audio_segs:
-        if start >= 0 and end >= 0:
-            for t in range(int(start), int(end) + 1):
-                audio_buckets.add(t)
+    # OCR이 커버하는 1초 버킷 집합
+    ocr_buckets = set()
+    for timestamp, _ in ocr_segs:
+        ocr_buckets.add(int(timestamp))
 
-    # 음성 세그먼트 추가
-    for start, end, text in audio_segs:
-        merged.append((max(0.0, start), "음성", text))
-
-    # 음성이 없는 구간의 OCR만 추가
+    # OCR 세그먼트 전부 추가
     for timestamp, text in ocr_segs:
-        if int(timestamp) not in audio_buckets:
-            merged.append((timestamp, "자막", text))
+        merged.append((timestamp, "자막", text))
+
+    # OCR이 없는 구간의 음성만 추가
+    for start, end, text in audio_segs:
+        if start < 0 or int(start) not in ocr_buckets:
+            merged.append((max(0.0, start), "음성", text))
 
     merged.sort(key=lambda x: x[0])
     return merged
