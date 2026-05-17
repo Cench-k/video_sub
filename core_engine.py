@@ -75,10 +75,10 @@ def _detect_ocr_lang(audio_segs):
     return ["ko", "en"]
 
 
-def _run_ocr(video_path, device, ocr_langs=None):
+def _run_ocr(video_path, device, ocr_langs=None, crop=None):
     """하드자막 OCR. [(timestamp_s, text), ...] 반환.
-    전체 프레임을 스캔해 위치에 무관하게 자막을 탐지.
-    동일 텍스트가 연속되면 하나로 묶어 노이즈와 구분.
+    crop=(top%, bottom%, left%, right%) 지정 시 해당 영역만 인식.
+    미지정 시 전체 프레임 스캔.
     """
     import cv2
     import easyocr
@@ -105,12 +105,22 @@ def _run_ocr(video_path, device, ocr_langs=None):
 
         if frame_idx % sample_interval == 0:
             timestamp = frame_idx / fps
+            h, w = frame.shape[:2]
 
-            ocr_res = reader.readtext(frame, detail=1)
-            # y좌표 기준 정렬 후 신뢰도 0.5 이상 + 2글자 이상만 채택
+            if crop:
+                top_pct, bottom_pct, left_pct, right_pct = crop
+                y1 = int(h * top_pct / 100)
+                y2 = int(h * bottom_pct / 100)
+                x1 = int(w * left_pct / 100)
+                x2 = int(w * right_pct / 100)
+                region = frame[y1:y2, x1:x2]
+            else:
+                region = frame
+
+            ocr_res = reader.readtext(region, detail=1)
             sorted_res = sorted(
                 [r for r in ocr_res if r[2] > 0.5 and len(r[1].strip()) >= 2],
-                key=lambda r: r[0][0][1]  # 바운딩박스 좌상단 y좌표
+                key=lambda r: r[0][0][1],
             )
             text = " ".join(r[1] for r in sorted_res).strip()
 
@@ -162,7 +172,7 @@ def _format_combined(merged):
     return "\n".join(lines)
 
 
-def process_audio(audio_path, model_type, hf_token=""):
+def process_audio(audio_path, model_type, hf_token="", crop=None):
     if not audio_path:
         return "오디오 파일을 찾을 수 없습니다."
 
@@ -196,7 +206,7 @@ def process_audio(audio_path, model_type, hf_token=""):
                 return output_log + "\n[오류] easyocr 또는 opencv-python이 설치되어 있지 않습니다.\n'pip install easyocr opencv-python'을 실행해주세요."
 
             ocr_langs = _detect_ocr_lang(audio_segs)
-            ocr_segs = _run_ocr(audio_path, device, ocr_langs)
+            ocr_segs = _run_ocr(audio_path, device, ocr_langs, crop=crop)
             output_log += f"   - OCR 세그먼트 {len(ocr_segs)}개 추출 완료.\n"
 
             output_log += "3. 결과를 병합합니다...\n\n"

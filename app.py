@@ -1,30 +1,66 @@
 import gradio as gr
-import os
+import cv2
+import numpy as np
 from core_engine import process_audio
 
-def on_file_dropped(file_obj, selected_model, hf_token):
-    """
-    Gradio 웹 UI에서 파일을 올리는 순간 이 콜백 스크립트가 실행됩니다.
-    file_obj.name 경로를 읽어서 core_engine에 전달합니다.
-    """
-    if file_obj is None:
-        return ""
-    
-    # Gradio 버전에 따라 file_obj의 속성이 배열일 수도 있고 단일 객체일수도 있음.
-    # 단일 업로더 기준:
-    file_path = file_obj.name if hasattr(file_obj, 'name') else file_obj
-    
-    # AI 구동 및 결과 리턴
-    return process_audio(file_path, selected_model, hf_token)
 
-# ===== UI 레이아웃 설계 =====
+def extract_frame(file_obj):
+    """업로드된 영상에서 30% 지점 프레임 추출."""
+    if file_obj is None:
+        return None
+    path = file_obj.name if hasattr(file_obj, "name") else file_obj
+    cap = cv2.VideoCapture(path)
+    total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * 0.3))
+    ret, frame = cap.read()
+    cap.release()
+    if ret:
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return None
+
+
+def preview_crop(frame_img, top, bottom, left, right):
+    """슬라이더 값에 따라 선택 영역을 초록 박스로 표시."""
+    if frame_img is None:
+        return None
+    img = np.array(frame_img).copy()
+    h, w = img.shape[:2]
+    y1 = int(h * top / 100)
+    y2 = int(h * bottom / 100)
+    x1 = int(w * left / 100)
+    x2 = int(w * right / 100)
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 220, 0), -1)
+    img = cv2.addWeighted(overlay, 0.25, img, 0.75, 0)
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 220, 0), 2)
+    return img
+
+
+def on_analyze(file_obj, selected_model, hf_token, top, bottom, left, right):
+    if file_obj is None:
+        return "영상 파일을 먼저 업로드해주세요."
+    path = file_obj.name if hasattr(file_obj, "name") else file_obj
+    crop = (top, bottom, left, right)
+    return process_audio(path, selected_model, hf_token, crop=crop)
+
+
+def on_upload(file_obj, top, bottom, left, right):
+    """영상 업로드 시 프레임 미리보기 + 크롭 박스 표시."""
+    frame = extract_frame(file_obj)
+    return preview_crop(frame, top, bottom, left, right), frame
+
+
+# ===== UI =====
 with gr.Blocks(title="도우인 & 웹 영상 자막 추출기") as demo:
     gr.Markdown("# 🎙️ 로컬 자동 화자분리 및 자막 추출 (SenseVoice & WhisperX)")
-    gr.Markdown("> 원하시는 영상을 네모 박스에 **던져 넣으면 시작 버튼 누를 필요 없이 즉시 AI 분석이 시작**됩니다.")
-    
+    gr.Markdown("> 영상을 업로드하고 자막 영역을 맞춘 뒤 **분석 시작**을 누르세요.")
+
+    # 원본 프레임 (숨김 상태로 슬라이더 연동에 사용)
+    raw_frame = gr.State(None)
+
     with gr.Row():
+        # ── 왼쪽: 설정 ──────────────────────────────────────────────────────
         with gr.Column(scale=1):
-            # 설정 패널
             model_selector = gr.Dropdown(
                 label="AI 모델 선택",
                 choices=[
@@ -33,37 +69,66 @@ with gr.Blocks(title="도우인 & 웹 영상 자막 추출기") as demo:
                     ("🎙️ 음성 전용 (WhisperX)", "whisperx"),
                 ],
                 value="combined",
-                info="병합 모드: 음성 인식 공백은 화면 자막으로 자동 보완"
+                info="병합 모드: 하드자막 우선, 음성은 자막 없는 구간 보완",
             )
             token_input = gr.Textbox(
-                label="HuggingFace Token (선택)", 
-                placeholder="WhisperX 화자 분리 전용 토큰", 
+                label="HuggingFace Token (선택)",
+                placeholder="WhisperX 화자 분리 전용 토큰",
                 type="password",
-                info="FunASR(SenseVoice)는 토큰 없이도 동작합니다."
             )
-            
-            gr.Markdown("💡 **Tip:** SenseVoice를 선택한 상태에서 파일을 우측에 드래그 앤 드롭해 보세요!")
-            
+
+            gr.Markdown("### 자막 영역 설정")
+            gr.Markdown("영상 업로드 후 슬라이더로 초록 박스를 자막 위치에 맞추세요.")
+
+            crop_top = gr.Slider(0, 100, value=70, step=1, label="위쪽 경계 (%)")
+            crop_bottom = gr.Slider(0, 100, value=100, step=1, label="아래쪽 경계 (%)")
+            crop_left = gr.Slider(0, 100, value=0, step=1, label="왼쪽 경계 (%)")
+            crop_right = gr.Slider(0, 100, value=100, step=1, label="오른쪽 경계 (%)")
+
+            analyze_btn = gr.Button("▶ 분석 시작", variant="primary")
+
+        # ── 오른쪽: 영상 업로드 + 프레임 미리보기 ─────────────────────────
         with gr.Column(scale=2):
-            # 파일 업로드 (드래그 앤 드롭 영역)
             audio_upload = gr.File(
-                label="여기에 영상(MP4) 또는 음성 파일을 던져주세요 📥", 
-                file_count="single"
+                label="영상(MP4) 또는 음성 파일 업로드 📥",
+                file_count="single",
             )
-            
-    # 결과가 뜨는 큰 텍스트 박스
+            frame_preview = gr.Image(
+                label="자막 영역 미리보기 (초록 박스 = 선택된 영역)",
+                interactive=False,
+                height=300,
+            )
+
     result_output = gr.Textbox(
-        label="자막 및 화자분리 결과", 
-        lines=15, 
-        placeholder="이곳에 결과가 출력됩니다..."
+        label="자막 및 화자분리 결과",
+        lines=15,
+        placeholder="이곳에 결과가 출력됩니다...",
     )
 
-    # 🔗 이벤트 바인딩 (핵심: 오디오 박스 내용물이 변할 때 = 파일이 올라갈 때 자동 실행)
+    # ── 이벤트 ────────────────────────────────────────────────────────────
+    # 영상 업로드 → 프레임 추출 + 크롭 박스 표시
     audio_upload.change(
-        fn=on_file_dropped,
-        inputs=[audio_upload, model_selector, token_input],
-        outputs=result_output
+        fn=on_upload,
+        inputs=[audio_upload, crop_top, crop_bottom, crop_left, crop_right],
+        outputs=[frame_preview, raw_frame],
     )
+
+    # 슬라이더 변경 → 크롭 박스 실시간 업데이트
+    for slider in [crop_top, crop_bottom, crop_left, crop_right]:
+        slider.change(
+            fn=preview_crop,
+            inputs=[raw_frame, crop_top, crop_bottom, crop_left, crop_right],
+            outputs=frame_preview,
+        )
+
+    # 분석 시작 버튼
+    analyze_btn.click(
+        fn=on_analyze,
+        inputs=[audio_upload, model_selector, token_input,
+                crop_top, crop_bottom, crop_left, crop_right],
+        outputs=result_output,
+    )
+
 
 if __name__ == "__main__":
     print("Local Web Server Initializing...")
