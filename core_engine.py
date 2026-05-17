@@ -28,7 +28,17 @@ def process_audio(audio_path, model_type, hf_token=""):
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
             output_log += f"   - 사용 장치(Device): {device}\n"
-            
+
+            # sentencepiece가 경로의 한글 등 비ASCII 문자를 처리 못하는 Windows 문제 우회:
+            # 홈 경로에 비ASCII가 있을 때만 시스템 드라이브의 ASCII 경로로 캐시를 리디렉션합니다.
+            home = os.path.expanduser("~")
+            if not home.isascii():
+                system_drive = os.environ.get("SYSTEMDRIVE", "C:")
+                ascii_cache = f"{system_drive}/modelscope_cache"
+                os.makedirs(ascii_cache, exist_ok=True)
+                os.environ["MODELSCOPE_CACHE"] = ascii_cache
+                os.environ["HF_HOME"] = ascii_cache
+
             # 긴 영상 처리를 위해 VAD(fsmn-vad) 모델을 함께 불러옵니다.
             # VAD가 알아서 침묵 구간을 가위질하여 SenseVoice의 환각/반복 증상을 방지합니다.
             model = AutoModel(
