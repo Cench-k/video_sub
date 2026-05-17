@@ -61,14 +61,25 @@ def _run_sensevoice(audio_path, device):
     return segments
 
 
-def _run_ocr(video_path, device):
+def _detect_ocr_lang(audio_segs):
+    """음성 세그먼트 텍스트에 한자가 있으면 중국어 리더, 없으면 한국어 리더 선택."""
+    combined = " ".join(text for _, _, text in audio_segs)
+    if any("一" <= ch <= "鿿" for ch in combined):
+        return ["ch_sim", "en"]
+    return ["ko", "en"]
+
+
+def _run_ocr(video_path, device, ocr_langs=None):
     """하드자막 OCR. [(timestamp_s, text), ...] 반환."""
     import cv2
     import easyocr
     import torch
 
+    if ocr_langs is None:
+        ocr_langs = ["ko", "en"]
+
     gpu = torch.cuda.is_available()
-    reader = easyocr.Reader(["ko", "en", "ch_sim"], gpu=gpu)
+    reader = easyocr.Reader(ocr_langs, gpu=gpu)
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -174,7 +185,8 @@ def process_audio(audio_path, model_type, hf_token=""):
             except ImportError:
                 return output_log + "\n[오류] easyocr 또는 opencv-python이 설치되어 있지 않습니다.\n'pip install easyocr opencv-python'을 실행해주세요."
 
-            ocr_segs = _run_ocr(audio_path, device)
+            ocr_langs = _detect_ocr_lang(audio_segs)
+            ocr_segs = _run_ocr(audio_path, device, ocr_langs)
             output_log += f"   - OCR 세그먼트 {len(ocr_segs)}개 추출 완료.\n"
 
             output_log += "3. 결과를 병합합니다...\n\n"
