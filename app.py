@@ -26,10 +26,14 @@ with gr.Blocks(title="도우인 & 웹 영상 자막 추출기") as demo:
         with gr.Column(scale=1):
             # 설정 패널
             model_selector = gr.Dropdown(
-                label="AI 모델 (언어) 선택", 
-                choices=["sensevoice", "whisperx"], 
-                value="sensevoice",
-                info="중국어 위주는 SenseVoice, 영어 중심이면 WhisperX 권장"
+                label="AI 모델 선택",
+                choices=[
+                    ("🔀 음성 + 하드자막 병합 (권장)", "combined"),
+                    ("🎙️ 음성 전용 (SenseVoice)", "sensevoice"),
+                    ("🎙️ 음성 전용 (WhisperX)", "whisperx"),
+                ],
+                value="combined",
+                info="병합 모드: 음성 인식 공백은 화면 자막으로 자동 보완"
             )
             token_input = gr.Textbox(
                 label="HuggingFace Token (선택)", 

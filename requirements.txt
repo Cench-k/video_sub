@@ -3,3 +3,5 @@ funasr
 modelscope
 torch
 torchaudio
+easyocr
+opencv-python
