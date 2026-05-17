@@ -26,6 +26,12 @@ def _run_sensevoice(audio_path, device):
     )
     res = model.generate(input=audio_path, language="auto", use_itn=True)
 
+    # 디버그: 첫 번째 아이템의 키 목록과 key 값 출력
+    if res:
+        print("[DEBUG] res[0] keys:", list(res[0].keys()))
+        print("[DEBUG] res[0]['key']:", res[0].get("key", "없음"))
+        print("[DEBUG] res[0] timestamp 샘플:", str(res[0].get("timestamp", []))[:200])
+
     segments = []
     for item in res:
         text = item.get("text", "")
@@ -97,10 +103,12 @@ def _run_ocr(video_path, device, ocr_langs=None):
         if frame_idx % sample_interval == 0:
             timestamp = frame_idx / fps
             h, w = frame.shape[:2]
-            subtitle_region = frame[int(h * 0.75) :, :]  # 하단 25% 크롭
+            # 하단 30%, 좌우 10% 여백 제거 (TikTok UI 버튼 영역 제외)
+            subtitle_region = frame[int(h * 0.70):, int(w * 0.05):int(w * 0.85)]
 
             ocr_res = reader.readtext(subtitle_region, detail=1)
-            text = " ".join(r[1] for r in ocr_res if r[2] > 0.4).strip()
+            # 신뢰도 0.6 이상 + 3글자 이상만 허용 (UI 잔상 노이즈 제거)
+            text = " ".join(r[1] for r in ocr_res if r[2] > 0.6 and len(r[1].strip()) >= 3).strip()
 
             if text and text != prev_text:
                 results.append((timestamp, text))
