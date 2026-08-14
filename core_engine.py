@@ -14,16 +14,48 @@ def _setup_cache():
         os.environ["HF_HOME"] = ascii_cache
 
 
+def _local_model_dir(name):
+    """이미 받아둔 modelscope 캐시 경로를 찾는다. 없으면 None."""
+    base = os.environ.get("MODELSCOPE_CACHE") or os.path.join(
+        os.path.expanduser("~"), ".cache", "modelscope"
+    )
+    candidates = (
+        ("hub", "models", "iic", name),  # modelscope 1.2x 이후
+        ("hub", "iic", name),            # 구버전 레이아웃
+        ("models", "iic", name),
+    )
+    for parts in candidates:
+        path = os.path.join(base, *parts)
+        if os.path.isdir(path):
+            return path
+    return None
+
+
+def _sensevoice_kwargs(device):
+    """AutoModel 인자 구성.
+
+    modelscope 허브 API가 WAF에 막혀 403이 나는 경우가 있어(저장소 존재 확인 실패),
+    캐시가 있으면 로컬 경로를 직접 지정해 네트워크를 아예 타지 않는다.
+    trust_remote_code=False로 두면 저장소의 model.py 대신 funasr 내장
+    SenseVoiceSmall 구현을 쓰므로 원격 코드 다운로드도 불필요하다.
+    """
+    sv = _local_model_dir("SenseVoiceSmall")
+    vad = _local_model_dir("speech_fsmn_vad_zh-cn-16k-common-pytorch")
+    return {
+        "model": sv or "iic/SenseVoiceSmall",
+        "vad_model": vad or "fsmn-vad",
+        "trust_remote_code": False,
+        "device": device,
+        "disable_update": True,
+    }
+
+
 def _run_sensevoice(audio_path, device):
     """SenseVoice+VAD로 음성 인식. [(start_s, end_s, text), ...] 반환."""
     from funasr import AutoModel
 
-    model = AutoModel(
-        model="iic/SenseVoiceSmall",
-        vad_model="fsmn-vad",
-        trust_remote_code=True,
-        device=device,
-    )
+    _setup_cache()
+    model = AutoModel(**_sensevoice_kwargs(device))
     res = model.generate(input=audio_path, language="auto", use_itn=True)
 
     # 디버그: 첫 번째 아이템의 키 목록과 key 값 출력
@@ -232,12 +264,7 @@ def process_audio(audio_path, model_type, hf_token="", crop=None):
             output_log += f"   - 사용 장치(Device): {device}\n"
             _setup_cache()
 
-            model = AutoModel(
-                model="iic/SenseVoiceSmall",
-                vad_model="fsmn-vad",
-                trust_remote_code=True,
-                device=device,
-            )
+            model = AutoModel(**_sensevoice_kwargs(device))
             output_log += "2. 음성 활동 감지(VAD) 장착 완료! 긴 영상도 안전하게 인식을 진행합니다...\n"
 
             res = model.generate(input=audio_path, language="auto", use_itn=True)
