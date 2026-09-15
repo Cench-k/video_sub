@@ -2,8 +2,10 @@
 chcp 65001 >nul
 title AI 자막 추출기 (SenseVoice / WhisperX)
 
-:: 업데이트로 이 bat 파일이 교체되어도 실행이 깨지지 않도록
-:: 임시 폴더의 사본에서 다시 실행한다.
+:: Re-run from a copy in %TEMP% so that a git update replacing this
+:: file mid-run cannot corrupt cmd's parsing. Comments must stay ASCII:
+:: chcp 65001 desyncs cmd's byte offsets and a multibyte comment line
+:: can lose its "::" prefix and get executed as a command.
 if defined SUBEXT_HOME goto :run
 set "SUBEXT_HOME=%~dp0"
 copy /y "%~f0" "%TEMP%\subext_launcher.bat" >nul
@@ -19,10 +21,10 @@ echo  로컬 자막 추출기
 echo =========================================
 echo.
 
-:: 가상환경이 없으면 안내
+:: No venv -> show setup instructions
 if not exist ".\venv\Scripts\python.exe" goto :novenv
 
-:: 버전 확인 및 자동 업데이트
+:: Version check and auto update
 if not exist "updater.py" goto :skip_update
 .\venv\Scripts\python.exe updater.py
 if errorlevel 10 goto :launcher_updated

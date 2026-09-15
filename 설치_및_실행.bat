@@ -6,7 +6,9 @@ title AI 자막 추출기 - 설치 및 실행
 set "REPO=https://github.com/Cench-k/video_sub.git"
 set "DIRNAME=video_sub"
 
-:: 업데이트로 이 파일이 교체되어도 실행이 깨지지 않도록 임시 폴더 사본에서 실행한다.
+:: Re-run from a copy in %TEMP% so a git update cannot corrupt parsing.
+:: Keep all comments ASCII: chcp 65001 desyncs cmd's byte offsets and a
+:: multibyte comment can lose its "::" prefix and be executed.
 if defined SUBEXT_SETUP_HOME goto :start
 set "SUBEXT_SETUP_HOME=%~dp0"
 copy /y "%~f0" "%TEMP%\subext_setup.bat" >nul
@@ -23,19 +25,19 @@ echo  설치 및 실행
 echo =========================================
 echo.
 
-:: ── 소스 위치 결정 ────────────────────────────────────────────────
-:: 이 파일이 저장소 안에 있으면 그대로 사용
+:: --- locate source ---
+:: already inside the repo -> use it
 if exist "app.py" (
     set "TARGET=%CD%"
     goto :have_source
 )
-:: 옆에 이미 받아둔 폴더가 있으면 재사용
+:: reuse a previously cloned folder next to this file
 if exist "%DIRNAME%\app.py" (
     set "TARGET=%CD%\%DIRNAME%"
     goto :have_source
 )
 
-:: 없으면 git 으로 내려받기
+:: otherwise clone with git
 where git >nul 2>nul
 if errorlevel 1 (
     echo [오류] git 이 설치되어 있지 않습니다.
@@ -64,7 +66,7 @@ cd /d "%TARGET%"
 echo   - 작업 폴더: %TARGET%
 echo.
 
-:: ── python 확인 ──────────────────────────────────────────────────
+:: --- check python ---
 where python >nul 2>nul
 if errorlevel 1 (
     echo [오류] python 을 찾을 수 없습니다.
@@ -76,7 +78,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: ── 가상환경 ─────────────────────────────────────────────────────
+:: --- venv ---
 echo [2/5] 가상환경(venv)을 확인합니다...
 if not exist "venv\Scripts\python.exe" (
     echo   - venv 가 없어 새로 만듭니다...
@@ -89,7 +91,7 @@ if not exist "venv\Scripts\python.exe" (
     )
 )
 
-:: ── 패키지 설치 ──────────────────────────────────────────────────
+:: --- install packages ---
 echo [3/5] 필요한 패키지를 확인합니다...
 if not exist "venv\.installed" (
     echo   - 최초 1회 설치를 진행합니다. 수 분 정도 걸릴 수 있습니다...
@@ -107,7 +109,7 @@ if not exist "venv\.installed" (
     echo   - 이미 설치되어 있습니다. ^(다시 설치하려면 venv\.installed 파일을 지우세요^)
 )
 
-:: ── 버전 확인 ───────────────────────────────────────────────────
+:: --- version check ---
 echo.
 echo [4/5] 버전을 확인합니다...
 if not exist "updater.py" goto :skip_update
@@ -115,7 +117,7 @@ if not exist "updater.py" goto :skip_update
 if errorlevel 10 goto :launcher_updated
 
 :skip_update
-:: ── 실행 ─────────────────────────────────────────────────────────
+:: --- run ---
 echo.
 echo [5/5] 서버를 시작합니다. 잠시 후 브라우저가 열립니다.
 echo   * 이 검은 창이 서버 본체입니다. 작업 중에는 닫지 마세요.
