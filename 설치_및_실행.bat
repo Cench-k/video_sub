@@ -6,7 +6,16 @@ title AI 자막 추출기 - 설치 및 실행
 set "REPO=https://github.com/Cench-k/video_sub.git"
 set "DIRNAME=video_sub"
 
-cd /d "%~dp0"
+:: 업데이트로 이 파일이 교체되어도 실행이 깨지지 않도록 임시 폴더 사본에서 실행한다.
+if defined SUBEXT_SETUP_HOME goto :start
+set "SUBEXT_SETUP_HOME=%~dp0"
+copy /y "%~f0" "%TEMP%\subext_setup.bat" >nul
+if errorlevel 1 goto :start
+"%TEMP%\subext_setup.bat"
+exit /b %errorlevel%
+
+:start
+cd /d "%SUBEXT_SETUP_HOME%"
 
 echo =========================================
 echo  AI 자막 추출기 (SenseVoice / WhisperX)
@@ -40,7 +49,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/4] 소스를 내려받는 중입니다...
+echo [1/5] 소스를 내려받는 중입니다...
 git clone "%REPO%" "%DIRNAME%"
 if errorlevel 1 (
     echo.
@@ -68,7 +77,7 @@ if errorlevel 1 (
 )
 
 :: ── 가상환경 ─────────────────────────────────────────────────────
-echo [2/4] 가상환경(venv)을 확인합니다...
+echo [2/5] 가상환경(venv)을 확인합니다...
 if not exist "venv\Scripts\python.exe" (
     echo   - venv 가 없어 새로 만듭니다...
     python -m venv venv
@@ -81,7 +90,7 @@ if not exist "venv\Scripts\python.exe" (
 )
 
 :: ── 패키지 설치 ──────────────────────────────────────────────────
-echo [3/4] 필요한 패키지를 확인합니다...
+echo [3/5] 필요한 패키지를 확인합니다...
 if not exist "venv\.installed" (
     echo   - 최초 1회 설치를 진행합니다. 수 분 정도 걸릴 수 있습니다...
     ".\venv\Scripts\python.exe" -m pip install --upgrade pip
@@ -98,9 +107,17 @@ if not exist "venv\.installed" (
     echo   - 이미 설치되어 있습니다. ^(다시 설치하려면 venv\.installed 파일을 지우세요^)
 )
 
+:: ── 버전 확인 ───────────────────────────────────────────────────
+echo.
+echo [4/5] 버전을 확인합니다...
+if not exist "updater.py" goto :skip_update
+".env\Scripts\python.exe" updater.py
+if errorlevel 10 goto :launcher_updated
+
+:skip_update
 :: ── 실행 ─────────────────────────────────────────────────────────
 echo.
-echo [4/4] 서버를 시작합니다. 잠시 후 브라우저가 열립니다.
+echo [5/5] 서버를 시작합니다. 잠시 후 브라우저가 열립니다.
 echo   * 이 검은 창이 서버 본체입니다. 작업 중에는 닫지 마세요.
 echo   * 최초 실행 시 AI 모델 다운로드(수백 MB)로 시간이 걸릴 수 있습니다.
 echo.
@@ -109,3 +126,12 @@ echo.
 echo.
 echo 서버가 종료되었습니다.
 pause
+exit /b 0
+
+:launcher_updated
+echo.
+echo   실행 파일이 업데이트되었습니다.
+echo   이 창을 닫고 다시 실행해 주세요.
+echo.
+pause
+exit /b 0

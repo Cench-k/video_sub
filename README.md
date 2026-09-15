@@ -59,6 +59,27 @@ python app.py
 
 > **주의:** 검은 콘솔창이 Gradio 서버 본체입니다. 작업 중에 닫지 마세요. 닫으면 브라우저에서 `ERR_CONNECTION_REFUSED` 가 납니다.
 
+## 자동 업데이트
+bat 파일로 실행하면 서버가 뜨기 전에 `updater.py` 가 두 가지를 확인합니다.
+
+**1) 프로그램 버전** — 매 실행마다 저장소를 확인해 새 버전이 있으면 자동으로 내려받습니다.
+- 소스를 직접 고친 상태(추적 중인 파일이 수정됨)면 그 내용을 지키기 위해 업데이트를 건너뜁니다.
+- `requirements.txt` 가 바뀐 경우에만 패키지를 다시 설치합니다. (`venv\.reqhash` 로 판별)
+- bat 파일 자체가 갱신되면 "다시 실행해 주세요" 안내 후 종료합니다. 한 번 더 실행하면 새 버전으로 동작합니다.
+
+**2) 엔진 버전** — `funasr`, `modelscope`, `easyocr`, `gradio`, `whisperx` 를 PyPI 최신 버전으로 유지합니다.
+- 조회는 하루에 한 번만 합니다. (`venv\.enginecheck`)
+- **`torch` / `torchaudio` 는 확인만 하고 자동 업그레이드하지 않습니다.** 자동 업그레이드하면 CUDA 빌드가 CPU 전용 휠로 조용히 바뀔 수 있어서입니다. 새 버전 안내가 떠도 직접 판단해 설치하세요.
+- 인터넷이 안 되면 조용히 건너뛰고 현재 버전으로 실행합니다.
+
+환경 변수로 동작을 바꿀 수 있습니다.
+```bat
+set SUBEXT_CHECK_ONLY=1           :: 버전만 확인하고 갱신하지 않음
+set SUBEXT_FORCE_ENGINE_CHECK=1   :: 하루 한 번 제한을 무시하고 즉시 조회
+```
+
+> AI 모델 가중치(SenseVoice, VAD)는 자동 갱신 대상이 **아닙니다**. ModelScope 허브 API가 WAF 에 막혀 403 이 나는 문제 때문에 로컬 캐시를 그대로 쓰도록 고정돼 있습니다.
+
 ## 화자 분리 (WhisperX) 사용법
 1. https://huggingface.co/settings/tokens 에서 **Read 권한 토큰** 발급
 2. 아래 두 모델의 "Agree and access repository" 클릭
