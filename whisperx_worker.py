@@ -18,16 +18,24 @@ def log(msg):
 
 
 def pick_compute_type(device):
-    """VRAM 에 맞는 연산 타입. 3GB 급 카드에서 float16 large-v3 는 OOM 난다."""
+    """장치가 실제로 지원하는 연산 타입을 고른다.
+
+    ctranslate2 의 float16 계열은 compute capability 7.0 이상만 지원한다.
+    GTX 1060(sm_61) 같은 Pascal 카드에서 int8_float16 을 요청하면
+    "target device or backend do not support" 로 죽는다.
+    또 3GB 급 카드에서 float16 large-v3 는 VRAM 이 모자란다.
+    """
     if device != "cuda":
         return "int8"
     try:
         import torch
 
+        if torch.cuda.get_device_capability() < (7, 0):
+            return "int8"
         free, _ = torch.cuda.mem_get_info()
         return "float16" if free >= 5.5e9 else "int8_float16"
     except Exception:
-        return "int8_float16"
+        return "int8"
 
 
 def main():

@@ -341,8 +341,13 @@ def process_audio(audio_path, model_type, hf_token="", crop=None):
             else:
                 output_log += "   - HuggingFace 토큰이 없어 화자 분리는 생략합니다.\n"
 
+            # torchcodec/lightning/TF32 경고가 UI 로그를 덮어서 경고만 끈다.
+            # 실제 오류는 예외/트레이스백으로 나오므로 그대로 보인다.
+            env = os.environ.copy()
+            env.setdefault("PYTHONWARNINGS", "ignore")
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", env=env,
             )
             if proc.stderr:
                 output_log += proc.stderr
