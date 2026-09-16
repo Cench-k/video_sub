@@ -185,7 +185,10 @@ def update_source():
 # ── 엔진(AI 패키지) 버전 ────────────────────────────────────────────
 # 자동 최신 유지 대상. torch/torchaudio 는 제외한다: CUDA 빌드가 아닌
 # CPU 휠로 조용히 바뀌어 버릴 수 있어 확인만 하고 손대지 않는다.
-ENGINE_AUTO = ("funasr", "modelscope", "easyocr", "gradio", "whisperx")
+ENGINE_AUTO = ("funasr", "modelscope", "easyocr", "gradio")
+# whisperx 는 huggingface-hub<1.0 을 요구해 gradio 와 공존할 수 없어
+# venv_whisperx 전용 환경에 따로 설치한다. 그쪽은 별도로 확인한다.
+WHISPERX_PY = os.path.join(ROOT, "venv_whisperx", "Scripts", "python.exe")
 ENGINE_CHECK_ONLY = ("torch", "torchaudio")
 ENGINE_STAMP = os.path.join(ROOT, "venv", ".enginecheck")
 ENGINE_INTERVAL = 24 * 60 * 60  # 하루에 한 번만 조회
@@ -255,6 +258,7 @@ def check_engines():
     for n in ENGINE_AUTO:
         if not installed_version(n):
             out("  - %-12s 설치되지 않음" % n)
+    check_whisperx_venv()
 
     if not due_for_engine_check():
         for n in names:
@@ -306,6 +310,51 @@ def check_engines():
     out("  - 엔진 갱신 완료")
     for n in outdated:
         out("      %-12s %s" % (n, installed_version(n) or "?"))
+
+
+
+def check_whisperx_venv():
+    """whisperx 전용 venv 가 있으면 그쪽 whisperx 도 최신으로 맞춘다."""
+    if not os.path.exists(WHISPERX_PY):
+        out("  - whisperx     전용 venv 없음 (UI 에서 WhisperX 선택 시 안내 표시)")
+        return
+
+    p = subprocess.run(
+        [WHISPERX_PY, "-c",
+         "import importlib.metadata as m; print(m.version('whisperx'))"],
+        capture_output=True, text=True,
+    )
+    cur = (p.stdout or "").strip()
+    if p.returncode != 0 or not cur:
+        out("  - whisperx     전용 venv 에서 버전을 읽을 수 없음")
+        return
+
+    if not due_for_engine_check():
+        out("  - whisperx     %s  (전용 venv)" % cur)
+        return
+
+    new = latest_version("whisperx")
+    if new is None:
+        out("  - whisperx     %s  (전용 venv, 최신 버전 조회 실패)" % cur)
+        return
+    if not is_older(cur, new):
+        out("  - whisperx     %s  (전용 venv, 최신)" % cur)
+        return
+
+    out("  - whisperx     %s -> %s  [전용 venv 갱신]" % (cur, new))
+    if os.environ.get("SUBEXT_CHECK_ONLY"):
+        out("    확인만 하도록 설정되어 갱신하지 않습니다.")
+        return
+    # torch 는 CUDA 빌드가 CPU 휠로 바뀌지 않게 건드리지 않는다.
+    r = subprocess.run(
+        [WHISPERX_PY, "-m", "pip", "install", "--upgrade",
+         "--upgrade-strategy", "only-if-needed", "whisperx"],
+        cwd=ROOT,
+    )
+    if r.returncode != 0:
+        out("    ! whisperx 갱신 실패. 기존 버전을 유지합니다.")
+    else:
+        out("    - whisperx 갱신 완료")
 
 
 def main():

@@ -39,11 +39,40 @@ venv\Scripts\activate          # (Linux/Mac: source venv/bin/activate)
 pip install -r requirements.txt
 ```
 
-### WhisperX 를 사용할 경우 추가 설치
+### WhisperX 를 사용할 경우: 전용 venv 가 필요합니다
+
+whisperx 는 `huggingface-hub<1.0` 을, gradio 6 은 `>=1.16` 을 요구해서 **한 환경에 함께 설치할 수 없습니다.**
+그래서 whisperx 만 별도 venv 에 두고, `core_engine` 이 `whisperx_worker.py` 를 서브프로세스로 호출합니다.
+
 ```bash
-pip install whisperx
+python -m venv venv_whisperx
+venv_whisperx\Scripts\python.exe -m pip install whisperx
 ```
-※ `torch` CUDA 빌드가 필요하면 https://pytorch.org/get-started/locally/ 에서 환경에 맞는 명령으로 설치하세요.
+
+GPU 를 쓰려면 그 venv 에도 CUDA 빌드를 넣어야 합니다. whisperx 는 `torch~=2.8.0` 을 요구합니다.
+같은 버전 번호의 CPU 휠이 이미 깔려 있으면 pip 가 건너뛰므로 `--force-reinstall` 이 필요합니다.
+
+```bash
+venv_whisperx\Scripts\python.exe -m pip install --force-reinstall --no-deps ^
+  torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 ^
+  --index-url https://download.pytorch.org/whl/cu126
+```
+
+동작 확인:
+```bash
+venv_whisperx\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_arch_list())"
+```
+
+### 메인 venv 에 CUDA torch 넣기
+`requirements.txt` 의 `torch` 는 PyPI 기본(CPU) 휠입니다. GPU 를 쓰려면 카드에 맞는 빌드를 직접 넣으세요.
+GTX 1060 등 Pascal(sm_61) 카드는 cu124 계열이 안전합니다 (최신 cu128 빌드는 Pascal 커널이 빠져 있습니다).
+
+```bash
+venv\Scripts\python.exe -m pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 ^
+  --index-url https://download.pytorch.org/whl/cu124
+```
+
+`torch` 는 자동 업데이트 대상이 아니므로 한 번 맞춰두면 유지됩니다.
 
 ## 실행
 Windows: `설치_및_실행.bat` 또는 `자막추출기_실행.bat` 더블클릭
@@ -70,6 +99,7 @@ bat 파일로 실행하면 서버가 뜨기 전에 `updater.py` 가 두 가지�
 **2) 엔진 버전** — `funasr`, `modelscope`, `easyocr`, `gradio`, `whisperx` 를 PyPI 최신 버전으로 유지합니다.
 - 조회는 하루에 한 번만 합니다. (`venv\.enginecheck`)
 - **`torch` / `torchaudio` 는 확인만 하고 자동 업그레이드하지 않습니다.** 자동 업그레이드하면 CUDA 빌드가 CPU 전용 휠로 조용히 바뀔 수 있어서입니다. 새 버전 안내가 떠도 직접 판단해 설치하세요.
+- `whisperx` 는 `venv_whisperx` 쪽에서 따로 확인·갱신합니다. 전용 venv 가 없으면 안내만 표시합니다.
 - 인터넷이 안 되면 조용히 건너뛰고 현재 버전으로 실행합니다.
 
 환경 변수로 동작을 바꿀 수 있습니다.

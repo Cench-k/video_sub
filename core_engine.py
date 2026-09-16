@@ -1,5 +1,9 @@
+import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import traceback
 
 
@@ -12,6 +16,27 @@ def _setup_cache():
         os.makedirs(ascii_cache, exist_ok=True)
         os.environ["MODELSCOPE_CACHE"] = ascii_cache
         os.environ["HF_HOME"] = ascii_cache
+
+
+
+def _whisperx_python():
+    """whisperx 를 실행할 파이썬을 찾는다.
+
+    whisperx(huggingface-hub<1.0)와 gradio 6(>=1.16)은 한 환경에 공존할 수
+    없어 전용 venv 를 쓴다. 전용 venv 가 없으면, 현재 인터프리터에 whisperx
+    가 들어 있는 경우에 한해 그것을 쓴다.
+    """
+    root = os.path.dirname(os.path.abspath(__file__))
+    for rel in (("venv_whisperx", "Scripts", "python.exe"), ("venv_whisperx", "bin", "python")):
+        cand = os.path.join(root, *rel)
+        if os.path.exists(cand):
+            return cand
+    try:
+        import whisperx  # noqa: F401
+
+        return sys.executable
+    except Exception:
+        return None
 
 
 def _local_model_dir(name):
@@ -288,41 +313,60 @@ def process_audio(audio_path, model_type, hf_token="", crop=None):
                 output_log += "결과가 비어 있습니다."
             return output_log
 
-        # ── WhisperX ───────────────────────────────────────────────────────
+        # -- WhisperX (별도 venv 서브프로세스) --
         elif model_type == "whisperx":
             output_log += "1. WhisperX 파이프라인을 초기화 중입니다...\n"
 
-            try:
-                import whisperx
-            except ImportError:
-                return output_log + "\n[오류] whisperx 모듈이 설치되어 있지 않습니다.\n설치 가이드에 따라 먼저 whisperx를 설치해 주세요."
+            py = _whisperx_python()
+            if py is None:
+                return output_log + (
+                    "\n[오류] whisperx 실행 환경을 찾을 수 없습니다.\n"
+                    "whisperx 는 huggingface-hub<1.0 을 요구해 gradio 와 같은\n"
+                    "환경에 설치할 수 없습니다. 전용 환경을 만들어 주세요:\n"
+                    "    python -m venv venv_whisperx\n"
+                    "    venv_whisperx\\Scripts\\python.exe -m pip install whisperx\n"
+                )
 
-            output_log += f"   - 사용 장치(Device): {device}\n"
-
-            model = whisperx.load_model("large-v3", device, compute_type="float16" if device == "cuda" else "int8")
-            audio = whisperx.load_audio(audio_path)
-            result = model.transcribe(audio, batch_size=8)
-            output_log += "   - 오디오 텍스트화 완료.\n"
-
+            out_path = os.path.join(
+                tempfile.gettempdir(), "subext_whisperx_%d.json" % os.getpid()
+            )
+            cmd = [
+                py,
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "whisperx_worker.py"),
+                "--audio", audio_path,
+                "--out", out_path,
+            ]
             if hf_token:
-                output_log += "2. 화자 분리(Diarization)를 시작합니다...\n"
-                try:
-                    diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
-                    diarize_segments = diarize_model(audio)
-                    result = whisperx.assign_word_speakers(diarize_segments, result)
-                    output_log += "   - 화자 분리 완료.\n\n"
-                except Exception as e:
-                    output_log += f"\n[경고] 화자 분리 중 오류 발생: {str(e)}\n\n"
+                cmd += ["--hf-token", hf_token]
             else:
-                output_log += "   - HuggingFace 토큰이 없어 화자 분리는 생략합니다.\n\n"
+                output_log += "   - HuggingFace 토큰이 없어 화자 분리는 생략합니다.\n"
 
-            output_log += "[✅ 추출 결과]\n"
-            for segment in result["segments"]:
-                speaker = segment.get("speaker", "SPEAKER_UNKNOWN")
-                start = round(segment.get("start", 0), 2)
-                end = round(segment.get("end", 0), 2)
-                text = segment.get("text", "")
-                output_log += f"[{speaker}] ( {start}s ~ {end}s ) : {text}\n"
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
+            if proc.stderr:
+                output_log += proc.stderr
+
+            if proc.returncode != 0 or not os.path.exists(out_path):
+                return output_log + "\n[오류] WhisperX 실행에 실패했습니다.\n" + (proc.stdout or "")
+
+            try:
+                with open(out_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            finally:
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+
+            output_log += "\n[결과]\n"
+            for seg in data.get("segments", []):
+                speaker = seg.get("speaker") or "SPEAKER_UNKNOWN"
+                start = round(seg.get("start", 0), 2)
+                end = round(seg.get("end", 0), 2)
+                output_log += "[%s] ( %ss ~ %ss ) : %s\n" % (
+                    speaker, start, end, seg.get("text", ""),
+                )
             return output_log
 
     except Exception:
