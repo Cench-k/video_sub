@@ -8,14 +8,40 @@ import traceback
 
 
 def _setup_cache():
-    """한글 등 비ASCII 홈 경로 환경에서 modelscope 캐시를 ASCII 경로로 우회."""
-    home = os.path.expanduser("~")
-    if not home.isascii():
-        system_drive = os.environ.get("SYSTEMDRIVE", "C:")
-        ascii_cache = f"{system_drive}/modelscope_cache"
-        os.makedirs(ascii_cache, exist_ok=True)
-        os.environ["MODELSCOPE_CACHE"] = ascii_cache
-        os.environ["HF_HOME"] = ascii_cache
+    """한글 등 비ASCII 홈 경로 환경에서 modelscope 캐시를 ASCII 경로로 우회.
+
+    sentencepiece 는 비ASCII 경로의 파일을 열지 못한다(Illegal byte sequence
+    Error #42). funasr 1.4.16 부터 SenseVoice 의 .bpe.model 을 실제로 열기
+    때문에 한글 사용자명 PC 에서 모델 로드가 죽는다.
+    캐시 실물은 그대로 두고 ASCII 경로의 정션을 만들어 그 경로를 넘긴다.
+    데이터 이동이 없어 이미 받아둔 모델도 그대로 쓴다.
+    """
+    current = os.environ.get("MODELSCOPE_CACHE")
+    if current and current.isascii():
+        return  # 이미 ASCII 경로 (사용자가 수동으로 설정한 경우 포함)
+    real = current or os.path.join(os.path.expanduser("~"), ".cache", "modelscope")
+    if real.isascii() or os.name != "nt":
+        return
+
+    public = os.environ.get("PUBLIC", r"C:\Users\Public")
+    if not public.isascii():
+        public = os.environ.get("SYSTEMDRIVE", "C:") + "\\"
+    link = os.path.join(public, "modelscope-cache")
+
+    try:
+        os.makedirs(real, exist_ok=True)  # 첫 설치 PC: 다운로드가 정션 너머로 가도록
+        if not os.path.exists(link):
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", link, real],
+                capture_output=True, check=True,
+            )
+        if os.path.normcase(os.path.realpath(link)) != os.path.normcase(os.path.realpath(real)):
+            raise RuntimeError(f"{link} 가 다른 위치를 가리킵니다")
+    except Exception as e:
+        print(f"[경고] ASCII 캐시 경로를 만들지 못했습니다 ({e}). "
+              f"한글 경로에서 SenseVoice 모델 로드가 실패할 수 있습니다.")
+        return
+    os.environ["MODELSCOPE_CACHE"] = link
 
 
 
