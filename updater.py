@@ -250,6 +250,95 @@ def touch_engine_stamp():
         pass
 
 
+
+# 같이 올려야 하는 짝 패키지. modelscope 1.40.1 은 메타데이터에 modelscope-hub>=0.4.2
+# 라고만 적어두고 실제로는 더 새 hub 가 필요해서, only-if-needed 로는 hub 가 안 올라가
+# import 단계에서 SenseVoice 가 통째로 죽었다 (2026-09-17 ~ 09-22). pip check 도 통과했다.
+COMPANIONS = {
+    "modelscope": ("modelscope-hub",),
+    "gradio": ("gradio-client",),
+}
+
+# 갱신 직후 실제로 돌려보는 점검. import 만으로는 부족하다 — funasr 1.4.16 의
+# sentencepiece 문제처럼 모델을 "로드할 때" 죽는 회귀가 있었다.
+MAIN_SMOKE = r"""
+import os, sys
+sys.path.insert(0, os.getcwd())
+import core_engine
+import app
+from funasr import AutoModel
+kw = core_engine._sensevoice_kwargs("cpu")
+if os.path.isdir(str(kw["model"])):
+    AutoModel(**kw)
+print("SMOKE_OK")
+"""
+WHISPERX_SMOKE = 'import whisperx; print("SMOKE_OK")'
+
+# CUDA 휠은 PyPI 에 없어서 버전 번호로 되돌릴 수 없다. 애초에 건드리지도 않는다.
+NO_ROLLBACK_PREFIX = ("torch",)
+
+
+def freeze(py):
+    r = subprocess.run([py, "-m", "pip", "freeze", "--all"], cwd=ROOT,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    pkgs = {}
+    for line in (r.stdout or "").splitlines():
+        if "==" in line:
+            name, ver = line.split("==", 1)
+            pkgs[name.strip().lower().replace("_", "-")] = ver.strip()
+    return pkgs
+
+
+def smoke_test(py, code):
+    env = dict(os.environ, PYTHONWARNINGS="ignore")
+    try:
+        r = subprocess.run([py, "-c", code], cwd=ROOT, env=env, timeout=900,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return False, "시간 초과"
+    if "SMOKE_OK" in (r.stdout or ""):
+        return True, ""
+    lines = (r.stderr or r.stdout or "").strip().splitlines()
+    return False, (lines[-1] if lines else "종료 코드 %s" % r.returncode)[:200]
+
+
+def upgrade_safely(py, packages, smoke_code, label):
+    """갱신하고 점검한다. 점검에 실패하면 바뀐 패키지만 이전 버전으로 되돌린다."""
+    targets = list(packages)
+    for n in packages:
+        for comp in COMPANIONS.get(n, ()):
+            if comp not in targets:
+                targets.append(comp)
+
+    before = freeze(py)
+    out("  - %s 갱신: %s" % (label, ", ".join(targets)))
+    r = subprocess.run([py, "-m", "pip", "install", "--upgrade",
+                        "--upgrade-strategy", "only-if-needed"] + targets, cwd=ROOT)
+    if r.returncode != 0:
+        out("  ! 갱신에 실패했습니다. 기존 버전으로 실행을 계속합니다.")
+        return False
+
+    out("  - 갱신 후 자가 점검 중 (모델 로드 포함, 수십 초 걸릴 수 있음)...")
+    ok, why = smoke_test(py, smoke_code)
+    if ok:
+        out("  - 갱신 완료, 점검 통과")
+        return True
+
+    out("  ! 갱신한 버전이 동작하지 않습니다: " + why)
+    after = freeze(py)
+    changed = ["%s==%s" % (n, v) for n, v in before.items()
+               if after.get(n) != v and "+" not in v and not n.startswith(NO_ROLLBACK_PREFIX)]
+    if not changed:
+        out("  ! 되돌릴 패키지를 찾지 못했습니다.")
+        return False
+    out("  - 이전 버전으로 되돌립니다: " + ", ".join(changed))
+    subprocess.run([py, "-m", "pip", "install", "--no-deps"] + changed, cwd=ROOT)
+    ok, why = smoke_test(py, smoke_code)
+    out("  - 되돌리기 완료. 이전 버전으로 실행합니다." if ok
+        else "  ! 되돌린 뒤에도 점검 실패: " + why)
+    return False
+
+
 def check_engines():
     out("")
     out("[엔진 버전]")
@@ -298,18 +387,9 @@ def check_engines():
         out("  ! venv 를 찾을 수 없어 엔진 갱신을 건너뜁니다.")
         return
 
-    out("  - 엔진을 갱신합니다: " + ", ".join(outdated))
-    r = subprocess.run(
-        [py, "-m", "pip", "install", "--upgrade", "--upgrade-strategy", "only-if-needed"]
-        + outdated,
-        cwd=ROOT,
-    )
-    if r.returncode != 0:
-        out("  ! 엔진 갱신에 실패했습니다. 기존 버전으로 실행을 계속합니다.")
-        return
-    out("  - 엔진 갱신 완료")
-    for n in outdated:
-        out("      %-12s %s" % (n, installed_version(n) or "?"))
+    if upgrade_safely(py, outdated, MAIN_SMOKE, "엔진"):
+        for n in outdated:
+            out("      %-12s %s" % (n, installed_version(n) or "?"))
 
 
 
@@ -345,16 +425,8 @@ def check_whisperx_venv():
     if os.environ.get("SUBEXT_CHECK_ONLY"):
         out("    확인만 하도록 설정되어 갱신하지 않습니다.")
         return
-    # torch 는 CUDA 빌드가 CPU 휠로 바뀌지 않게 건드리지 않는다.
-    r = subprocess.run(
-        [WHISPERX_PY, "-m", "pip", "install", "--upgrade",
-         "--upgrade-strategy", "only-if-needed", "whisperx"],
-        cwd=ROOT,
-    )
-    if r.returncode != 0:
-        out("    ! whisperx 갱신 실패. 기존 버전을 유지합니다.")
-    else:
-        out("    - whisperx 갱신 완료")
+    # only-if-needed: torch 의 CUDA 빌드가 CPU 휠로 바뀌지 않게 한다.
+    upgrade_safely(WHISPERX_PY, ["whisperx"], WHISPERX_SMOKE, "whisperx")
 
 
 def main():

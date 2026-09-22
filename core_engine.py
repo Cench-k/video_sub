@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -26,7 +27,10 @@ def _setup_cache():
     public = os.environ.get("PUBLIC", r"C:\Users\Public")
     if not public.isascii():
         public = os.environ.get("SYSTEMDRIVE", "C:") + "\\"
-    link = os.path.join(public, "modelscope-cache")
+    # 계정마다 다른 이름: 고정 이름이면 한 PC 의 두 번째 한글 계정(또는 계정
+    # 이름 변경 후)에서 "다른 위치를 가리킵니다" 로 막힌다.
+    tag = hashlib.sha1(os.path.normcase(real).encode("utf-8")).hexdigest()[:8]
+    link = os.path.join(public, "modelscope-cache-" + tag)
 
     try:
         os.makedirs(real, exist_ok=True)  # 첫 설치 PC: 다운로드가 정션 너머로 가도록
@@ -38,12 +42,49 @@ def _setup_cache():
         if os.path.normcase(os.path.realpath(link)) != os.path.normcase(os.path.realpath(real)):
             raise RuntimeError(f"{link} 가 다른 위치를 가리킵니다")
     except Exception as e:
-        print(f"[경고] ASCII 캐시 경로를 만들지 못했습니다 ({e}). "
-              f"한글 경로에서 SenseVoice 모델 로드가 실패할 수 있습니다.")
+        # 치명적이지 않다: sentencepiece 는 _patch_sentencepiece() 가 경로와
+        # 무관하게 처리한다. 정션은 다른 네이티브 로더를 위한 보조 방어다.
+        print(f"[안내] ASCII 캐시 정션을 만들지 못했습니다 ({e}). 한글 경로 그대로 진행합니다.")
         return
     os.environ["MODELSCOPE_CACHE"] = link
 
 
+
+def _patch_sentencepiece():
+    """sentencepiece 가 비ASCII 경로를 못 여는 문제를 경로와 무관하게 막는다.
+
+    sentencepiece 의 C++ 로더는 Windows 에서 경로를 시스템 코드페이지로 바꿔
+    열기 때문에 한글 경로면 "Illegal byte sequence Error #42" 로 죽는다.
+    funasr 1.4.16 부터 SenseVoice 가 .bpe.model 을 이렇게 연다.
+    파이썬으로 파일을 읽어 바이트(model_proto)로 넘기면 C++ 에 경로가 가지
+    않으므로 캐시가 어디 있든, 정션을 만들 수 있든 없든 동작한다.
+    """
+    try:
+        import sentencepiece as spm
+    except Exception:
+        return
+    cls = spm.SentencePieceProcessor
+    if getattr(cls, "_subext_patched", False):
+        return
+    original = cls.Load
+
+    def load(self, model_file=None, model_proto=None):
+        if model_proto is None and model_file and not str(model_file).isascii():
+            with open(model_file, "rb") as f:
+                model_proto = f.read()
+            model_file = None
+        return original(self, model_file=model_file, model_proto=model_proto)
+
+    # load 는 Load 의 별칭이고 Init 도 self.Load 를 부르므로 둘 다 바꾼다.
+    cls.Load = load
+    cls.load = load
+    cls._subext_patched = True
+
+
+# funasr/modelscope 를 import 하기 전에 적용해야 첫 설치 PC 의 모델 다운로드도
+# ASCII 경로로 간다. 함수 안에서만 부르면 순서가 호출부에 따라 달라진다.
+_setup_cache()
+_patch_sentencepiece()
 
 def _whisperx_python():
     """whisperx 를 실행할 파이썬을 찾는다.
